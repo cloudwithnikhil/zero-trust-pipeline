@@ -1,0 +1,39 @@
+﻿apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-zero-trust-demo
+spec:
+  evaluation:
+    background:
+      enabled: false
+
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: zero-trust-demo
+
+  matchImageReferences:
+    - glob: "ghcr.io/cloudwithnikhil/zero-trust-pipeline:*"
+
+  attestors:
+    - name: githubActions
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subject: "https://github.com/cloudwithnikhil/zero-trust-pipeline/.github/workflows/ci.yml@refs/heads/main"
+
+  validations:
+    - message: "Image must have a valid Cosign signature from the trusted GitHub Actions workflow."
+      expression: >-
+        images.containers.map(
+          image, verifyImageSignatures(image, [attestors.githubActions])
+        ).all(result, result > 0)
+
+  validationActions:
+    - Deny

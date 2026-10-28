@@ -1,0 +1,15 @@
+﻿.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+cosign.key
+cosign.pub
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.vscode/
+.DS_Store

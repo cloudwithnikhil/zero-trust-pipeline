@@ -26,3 +26,29 @@ Developer → GitHub → GitHub Actions
              Verify Sign.  Allow Registry
                     \         /
                      Admission
+
+
+## Security Validation
+
+Run the automated security checks against the configured Kubernetes cluster:
+
+```powershell
+.\scripts\validate-security.ps1
+```
+
+The validation script checks:
+
+- Kyverno `ImageValidatingPolicy` readiness.
+- Gatekeeper controller availability.
+- Application Deployment availability.
+- Workload hardening: non-root execution, read-only root filesystem, disabled privilege escalation, dropped Linux capabilities, disabled service-account token automount, and resource limits.
+- Application health endpoint.
+- Rejection of an image from Docker Hub by the Gatekeeper registry policy.
+
+**Latest local validation:** 6 checks passed, 0 failed.
+
+### Admission Policy Testing
+
+A separate negative test attempted to admit the project's published image using a deliberately incorrect GitHub Actions workflow identity. Kyverno denied the request, demonstrating that the image did not satisfy that identity requirement.
+
+This test does not replace a dedicated test using an existing unsigned image.

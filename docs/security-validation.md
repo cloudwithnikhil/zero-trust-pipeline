@@ -7,13 +7,13 @@
 - Admission policy: `verify-zero-trust-demo`
 - Registry constraint: `allow-ghcr-only`
 
-## Checks completed
+## Checks Completed
 
 | Check | Result | Evidence |
 |---|---|---|
 | Image build and CI workflow | Passed | Successful GitHub Actions run |
-| Kyverno policy readiness | Passed | `kubectl get imagevalidatingpolicies` |
-| Trusted image admission dry run | Accepted | Pod request resolved to an immutable image digest |
+| Kyverno policy readiness | Passed | `conditionStatus.ready: true` |
+| Trusted image admission dry run | Accepted | Request resolved to an immutable image digest |
 | Deployment admission dry run | Passed | Deployment and Service accepted by API server |
 | Kubernetes rollout | Passed | Deployment reported successfully rolled out |
 | Application Pod | Passed | Pod reached `Running` and `Ready` |
@@ -21,25 +21,49 @@
 | Privilege escalation | Disabled | `allowPrivilegeEscalation: false` |
 | Root filesystem | Read-only | `readOnlyRootFilesystem: true` |
 | Linux capabilities | Dropped | `capabilities.drop: ["ALL"]` |
+| Service-account token automount | Disabled | `automountServiceAccountToken: false` |
+| Resource limits | Configured | CPU and memory limits present |
 | HTTP health endpoint | Passed | Returned `status: healthy` |
+| Gatekeeper controller | Available | Controller Deployment has an available replica |
+| Registry restriction negative test | Rejected | Gatekeeper denied `docker.io/library/nginx:latest` |
+| Wrong workflow identity negative test | Rejected | Kyverno denied the request under a deliberately incorrect signer identity |
+| Automated validation script | Passed | `scripts/validate-security.ps1`: 6 passed, 0 failed |
 
-## Signature rejection test: pending conclusive verification
+## Signature Verification Negative Test
 
-A request using a nonexistent image tag was denied because GHCR returned
-`MANIFEST_UNKNOWN`. This is not proof of signature rejection.
+A request using a nonexistent image tag was denied because GHCR returned `MANIFEST_UNKNOWN`. This was not proof of signature rejection.
 
-A request using `ghcr.io/stefanprodan/podinfo:latest` was accepted by the
-Kyverno policy because that image is outside the policy's configured image
-reference scope. This is not a negative signature test.
+A request using `ghcr.io/stefanprodan/podinfo:latest` was accepted because that image was outside the Kyverno policy's configured image-reference scope. This was not a negative signature test.
 
-A conclusive test still needs to demonstrate that an existing image matching
-the protected repository scope, but lacking a valid signature from the
-trusted workflow identity, is rejected specifically by signature verification.
+A separate test used the project's existing published image with a temporary Kyverno policy configured for an intentionally incorrect GitHub Actions workflow identity. Kyverno denied the admission request with the policy's signature-verification validation message.
 
-## Operational notes
+This demonstrates rejection when the signer identity does not match the configured trusted identity. A dedicated test using an existing, unsigned image within the protected repository scope remains outstanding.
+
+The temporary test policy was deleted after the test. The production policy `verify-zero-trust-demo` remained in place and ready.
+
+## Automated Validation
+
+Run the following command from the repository root with the Kind cluster and admission controllers available:
+
+```powershell
+.\scripts\validate-security.ps1
+```
+
+The script checks:
+
+- Kyverno image-verification policy readiness.
+- Gatekeeper controller availability.
+- Application Deployment availability.
+- Workload security context and resource limits.
+- Application health endpoint.
+- Rejection of a Docker Hub image by Gatekeeper.
+
+Latest recorded result: **6 passed, 0 failed**.
+
+## Operational Notes
 
 - The trusted image was pinned to a digest during admission.
 - The application is exposed through an internal ClusterIP Service.
 - The successful HTTP health response confirms the endpoint is operational.
-- Gatekeeper registry enforcement and Kyverno signature verification are
-  separate controls and should be tested independently.
+- Gatekeeper registry enforcement and Kyverno signature verification are separate controls and should be tested independently.
+- The automated script verifies current cluster state; it does not replace the separate admission-negative tests documented above.

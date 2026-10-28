@@ -38,11 +38,23 @@ jobs:
           push: false
 
       - name: Scan image for vulnerabilities
+        id: grype
         uses: anchore/scan-action@v7
         with:
           image: ${{ env.IMAGE }}
           fail-build: true
           severity-cutoff: high
+          output-format: table
+          output-file: grype-results.txt
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-vulnerability-report
+          path: grype-results.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0

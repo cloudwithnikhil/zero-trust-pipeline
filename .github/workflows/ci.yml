@@ -1,0 +1,112 @@
+﻿name: Zero-Trust CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/cloudwithnikhil/zero-trust-pipeline:${{ github.sha }}
+
+jobs:
+  validate:
+    name: Build, Scan and Generate SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ${{ env.IMAGE }}
+          load: true
+          push: false
+
+      - name: Scan image for vulnerabilities
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.IMAGE }}
+          fail-build: true
+          severity-cutoff: high
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: zero-trust-demo-sbom
+          upload-artifact: true
+          upload-release-assets: false
+
+      - name: Export validated image
+        run: docker save "$IMAGE" -o image.tar
+
+      - name: Upload validated image for publishing
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-container-image
+          path: image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish-and-sign:
+    name: Publish to GHCR and Sign with Cosign
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Download validated image
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-container-image
+          path: .
+
+      - name: Load validated image
+        run: docker load --input image.tar
+
+      - name: Authenticate to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" |
+            docker login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Publish validated image
+        run: docker push "$IMAGE"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.0
+
+      - name: Sign published image using GitHub OIDC
+        run: |
+          DIGEST_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")"
+          if [ -z "$DIGEST_REF" ] || [ "$DIGEST_REF" = "<no value>" ]; then
+            echo "Could not determine the published image digest."
+            exit 1
+          fi
+          echo "Signing immutable image reference: $DIGEST_REF"
+          cosign sign --yes "$DIGEST_REF"

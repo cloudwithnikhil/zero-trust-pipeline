@@ -1,4 +1,4 @@
-﻿# Security Validation
+# Security Validation
 
 ## Environment
 
@@ -59,6 +59,35 @@ The script checks:
 - Rejection of a Docker Hub image by Gatekeeper.
 
 Latest recorded result: **6 passed, 0 failed**.
+
+
+## CI Security Evidence
+
+The GitHub Actions workflow is configured to produce the following evidence:
+
+| Evidence | Purpose | Status |
+|---|---|---|
+| Grype JSON report | Machine-readable vulnerability scan results | Pending successful workflow run |
+| SPDX JSON SBOM | Inventory of software components in the container image | Pending successful workflow run |
+| GitHub Actions job summary | Build, SBOM, and scan step outcomes | Pending successful workflow run |
+| Published image digest | Identifies the immutable image reference | Pending successful publish job |
+| Cosign verification output | Verifies the image signature against the expected GitHub Actions identity and OIDC issuer | Pending successful publish job |
+
+Expected workflow artifacts:
+
+- `security-evidence`
+- `zero-trust-demo-sbom`
+- `validated-container-image` (short retention for publishing)
+- `image-signing-evidence`
+
+The vulnerability scan is configured with `severity-cutoff: high` and `fail-build: true`. The CI job should fail if the scan meets the configured severity threshold.
+
+The publish-and-sign job runs only for pushes to `main`, after the validation job succeeds. It signs the published image by immutable digest and then verifies the signature.
+
+**Evidence status:** These are configured workflow behaviors, not confirmed results. Update this section after reviewing an actual successful GitHub Actions run and downloading its artifacts.
+
+The local Kind cluster admission tests are separate from the GitHub Actions workflow. They must continue to be validated independently.
+
 
 ## Operational Notes
 

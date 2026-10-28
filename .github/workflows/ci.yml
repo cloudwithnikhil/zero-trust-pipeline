@@ -19,6 +19,7 @@ jobs:
   validate:
     name: Build, Scan and Generate SBOM
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -30,6 +31,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build container image
+        id: build-image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -37,26 +39,8 @@ jobs:
           load: true
           push: false
 
-      - name: Scan image for vulnerabilities
-        id: grype
-        uses: anchore/scan-action@v7
-        with:
-          image: ${{ env.IMAGE }}
-          fail-build: true
-          severity-cutoff: high
-          output-format: table
-          output-file: grype-results.txt
-
-      - name: Upload vulnerability report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: grype-vulnerability-report
-          path: grype-results.txt
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Generate SPDX SBOM
+        id: sbom
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE }}
@@ -65,6 +49,41 @@ jobs:
           artifact-name: zero-trust-demo-sbom
           upload-artifact: true
           upload-release-assets: false
+
+
+      - name: Scan image for vulnerabilities
+        id: grype
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.IMAGE }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: json
+
+
+      - name: Save Grype JSON report
+        if: always()
+        env:
+          GRYPE_JSON_PATH: ${{ steps.grype.outputs.json }}
+        shell: bash
+        run: |
+          if [[ -n "$GRYPE_JSON_PATH" && -f "$GRYPE_JSON_PATH" ]]; then
+            cp "$GRYPE_JSON_PATH" grype-results.json
+            echo "Grype JSON report saved."
+          else
+            echo "Grype JSON report was not available."
+          fi
+
+      - name: Upload security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence
+          path: |
+            grype-results.json
+            sbom.spdx.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Export validated image
         run: docker save "$IMAGE" -o image.tar
@@ -76,6 +95,32 @@ jobs:
           path: image.tar
           retention-days: 1
           if-no-files-found: error
+
+      - name: Write CI security summary
+        if: always()
+        env:
+          BUILD_RESULT: ${{ steps.build-image.outcome }}
+          SBOM_RESULT: ${{ steps.sbom.outcome }}
+          GRYPE_RESULT: ${{ steps.grype.outcome }}
+        shell: bash
+        run: |
+          {
+            echo "## Zero-Trust CI Security Report"
+            echo
+            echo "- **Commit:** \`${GITHUB_SHA}\`"
+            echo "- **Image:** \`${IMAGE}\`"
+            echo
+            echo "| Control | Result | Details |"
+            echo "|---|---|---|"
+            echo "| Image build | ${BUILD_RESULT:-not run} | Docker Buildx |"
+            echo "| SPDX SBOM | ${SBOM_RESULT:-not run} | sbom.spdx.json |"
+            echo "| Grype scan | ${GRYPE_RESULT:-not run} | High/Critical severity gate |"
+            echo
+            echo "Security evidence artifact: \`security-evidence\`."
+            echo "The SBOM is also uploaded as \`zero-trust-demo-sbom\`."
+            echo
+            echo "Kubernetes admission validation is performed separately against the Kind cluster."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish-and-sign:
     name: Publish to GHCR and Sign with Cosign
@@ -114,11 +159,76 @@ jobs:
         uses: sigstore/cosign-installer@v4.1.0
 
       - name: Sign published image using GitHub OIDC
+        id: sign-image
+        shell: bash
         run: |
+          set -euo pipefail
+
           DIGEST_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")"
-          if [ -z "$DIGEST_REF" ] || [ "$DIGEST_REF" = "<no value>" ]; then
+
+          if [[ -z "$DIGEST_REF" || "$DIGEST_REF" == "<no value>" ]]; then
             echo "Could not determine the published image digest."
             exit 1
           fi
-          echo "Signing immutable image reference: $DIGEST_REF"
+
+          echo "Published immutable image reference: $DIGEST_REF"
+          echo "image_ref=$DIGEST_REF" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "Image reference: $DIGEST_REF"
+            echo "Commit: $GITHUB_SHA"
+            echo "Expected issuer: https://token.actions.githubusercontent.com"
+            echo "Expected identity: https://github.com/cloudwithnikhil/zero-trust-pipeline/.github/workflows/ci.yml@refs/heads/main"
+          } > image-signing-evidence.txt
+
           cosign sign --yes "$DIGEST_REF"
+
+      - name: Verify published image signature
+        id: verify-signature
+        env:
+          IMAGE_REF: ${{ steps.sign-image.outputs.image_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cosign verify \
+            --certificate-identity "https://github.com/cloudwithnikhil/zero-trust-pipeline/.github/workflows/ci.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$IMAGE_REF" > cosign-verification.json
+
+          echo "Cosign verification passed for $IMAGE_REF"
+
+      - name: Upload signing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-signing-evidence
+          path: |
+            image-signing-evidence.txt
+            cosign-verification.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write publishing and signing summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.sign-image.outputs.image_ref }}
+          SIGN_RESULT: ${{ steps.sign-image.outcome }}
+          VERIFY_RESULT: ${{ steps.verify-signature.outcome }}
+        shell: bash
+        run: |
+          {
+            echo "## Image Publishing and Signing Report"
+            echo
+            echo "- **Commit:** \`${GITHUB_SHA}\`"
+            echo "- **Published image digest:** ${IMAGE_REF:-not available}"
+            echo
+            echo "| Control | Result |"
+            echo "|---|---|"
+            echo "| Image signing | ${SIGN_RESULT:-not run} |"
+            echo "| Signature verification | ${VERIFY_RESULT:-not run} |"
+            echo
+            echo "Evidence artifact: \`image-signing-evidence\`."
+            echo
+            echo "The verification checks the configured GitHub Actions identity and OIDC issuer."
+          } >> "$GITHUB_STEP_SUMMARY"

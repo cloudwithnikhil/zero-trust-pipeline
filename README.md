@@ -52,3 +52,12 @@ The validation script checks:
 A separate negative test attempted to admit the project's published image using a deliberately incorrect GitHub Actions workflow identity. Kyverno denied the request, demonstrating that the image did not satisfy that identity requirement.
 
 This test does not replace a dedicated test using an existing unsigned image.
+
+
+## CI Security Evidence
+
+The GitHub Actions workflow is configured to generate vulnerability scan evidence and an SPDX SBOM, publish the validated image to GHCR on pushes to `main`, and sign and verify the published image using Cosign.
+
+After a successful workflow run, review the job summaries and download the available artifacts to inspect the reports and signature-verification evidence.
+
+Kubernetes admission-policy testing is performed separately against the local Kind cluster. See [Security Validation](docs/security-validation.md) for completed checks, negative-test results, and outstanding validation work.

@@ -284,11 +284,41 @@ jobs:
             --wait \
             --timeout 5m
 
-      - name: Wait for Kyverno admission controller
+
+      - name: Wait for Kyverno admission webhook
+        shell: bash
         run: |
+          set -euo pipefail
+
           kubectl rollout status deployment/kyverno-admission-controller \
             --namespace kyverno \
             --timeout=180s
+
+          for attempt in $(seq 1 30); do
+            ENDPOINTS="$(kubectl get endpoints kyverno-svc \
+              --namespace kyverno \
+              -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)"
+
+            if [[ -n "$ENDPOINTS" ]]; then
+              echo "Kyverno service has ready endpoints: $ENDPOINTS"
+              break
+            fi
+
+            if [[ "$attempt" == "30" ]]; then
+              echo "Kyverno service has no ready endpoints." >&2
+              kubectl get pods -n kyverno -o wide
+              kubectl get svc,endpoints -n kyverno
+              kubectl logs deployment/kyverno-admission-controller \
+                --namespace kyverno --tail=100 || true
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          kubectl get pods -n kyverno -o wide
+          kubectl get svc,endpoints -n kyverno
+
 
       - name: Create protected namespace
         run: |
@@ -402,15 +432,39 @@ jobs:
         run: |
           kubectl apply -f kubernetes/policies/gatekeeper-constraint-template.yaml
 
-      - name: Wait for generated constraint CRD
+
+      - name: Wait for Gatekeeper constraint CRD
         shell: bash
         run: |
           set -euo pipefail
 
-          kubectl wait \
-            --for=condition=Established \
-            crd/k8sallowedregistries.constraints.gatekeeper.sh \
-            --timeout=120s
+          CRD="k8sallowedregistries.constraints.gatekeeper.sh"
+
+          for attempt in $(seq 1 60); do
+            if kubectl wait \
+              --for=condition=Established \
+              "crd/$CRD" \
+              --timeout=2s >/dev/null 2>&1; then
+              echo "Generated constraint CRD is established."
+              kubectl get constrainttemplate k8sallowedregistry
+              kubectl get crd "$CRD"
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Gatekeeper did not establish the expected constraint CRD." >&2
+          kubectl get constrainttemplates
+          kubectl get constrainttemplate k8sallowedregistry -o yaml || true
+          kubectl get crd | grep gatekeeper || true
+          kubectl logs deployment/gatekeeper-controller-manager \
+            --namespace gatekeeper-system \
+            --all-pods=true \
+            --tail=100 || true
+          exit 1
+
+
 
       - name: Apply allowed-registry constraint
         run: |

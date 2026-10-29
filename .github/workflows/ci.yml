@@ -265,6 +265,7 @@ jobs:
         uses: helm/kind-action@v1.10.0
         with:
           cluster_name: zero-trust
+          node_image: kindest/node:v1.35.0
 
       - name: Install Helm
         uses: azure/setup-helm@v4

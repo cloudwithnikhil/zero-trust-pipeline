@@ -70,17 +70,18 @@ Zero Trust replaces *implicit* trust with *continuous verification*:
 
 ## Interactive Architecture
 
-Explore the animated architecture to understand how the Zero Trust CI/CD pipeline moves container images through build validation, vulnerability scanning, SBOM generation, image signing, and Kubernetes admission control.
+The diagram below illustrates the Zero Trust CI/CD pipeline, from source code validation and container image scanning to image signing and Kubernetes admission control.
 
-**[View the Interactive Architecture](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html)**
+
+**Explore the full interactive architecture:** [Open the animated architecture](docs/zero-trust-ci-cd-pipeline-architecture.html)
 
 The animation includes three scenarios:
 
-- **Signed image:** Demonstrates the intended successful signature-verification and admission flow.
-- **Unsigned image:** Illustrates how the signature policy is intended to reject an unsigned image.
-- **Unapproved registry:** Illustrates how Gatekeeper is intended to reject an image from an unapproved registry.
+- **Signed image:** Demonstrates the intended signature-verification and admission flow.
+- **Unsigned image:** Illustrates rejection by the image-signature policy.
+- **Unapproved registry:** Illustrates rejection by the Gatekeeper registry policy.
 
-The animation is an architectural demonstration. Actual enforcement behavior is determined by the GitHub Actions workflow and Kubernetes policy manifests in this repository.
+The diagram is illustrative. Actual enforcement behavior is determined by the GitHub Actions workflow and Kubernetes policy manifests in this repository.
 
 ## 3. Architecture
 

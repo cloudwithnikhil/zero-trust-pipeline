@@ -125,6 +125,8 @@ jobs:
   publish-and-sign:
     name: Publish to GHCR and Sign with Cosign
     needs: validate
+    outputs:
+      image_ref: ${{ steps.sign-image.outputs.image_ref }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
@@ -231,4 +233,120 @@ jobs:
             echo "Evidence artifact: \`image-signing-evidence\`."
             echo
             echo "The verification checks the configured GitHub Actions identity and OIDC issuer."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+          
+  admission-test:
+    name: Kubernetes Image Admission Tests
+    needs: [validate, publish-and-sign]
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          needs.publish-and-sign.result == 'success'
+        )
+      )
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Create disposable Kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: zero-trust
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install Kyverno
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm repo add kyverno https://kyverno.github.io/kyverno/
+          helm repo update
+
+          helm upgrade --install kyverno kyverno/kyverno \
+            --namespace kyverno \
+            --create-namespace \
+            --version 3.9.2 \
+            --wait \
+            --timeout 5m
+
+      - name: Wait for Kyverno admission controller
+        run: |
+          kubectl rollout status deployment/kyverno-admission-controller \
+            --namespace kyverno \
+            --timeout=180s
+
+      - name: Create protected namespace
+        run: |
+          kubectl create namespace zero-trust-demo
+
+      - name: Apply image signature policy
+        run: |
+          kubectl apply -f kubernetes/policies/verify-signed-images.yaml
+
+      - name: Wait for image verification policy readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 60); do
+            READY="$(kubectl get imagevalidatingpolicy \
+              verify-zero-trust-demo \
+              -o jsonpath='{.status.conditionStatus.ready}' 2>/dev/null || true)"
+
+            if [[ "$READY" == "true" ]]; then
+              echo "ImageValidatingPolicy is ready."
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          kubectl get imagevalidatingpolicy verify-zero-trust-demo -o yaml
+          echo "ImageValidatingPolicy did not become ready." >&2
+          exit 1
+
+      - name: Select trusted signed image
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            echo "SIGNED_IMAGE=ghcr.io/cloudwithnikhil/zero-trust-pipeline:${COMMIT_SHA}" >> "$GITHUB_ENV"
+          else
+            echo "SIGNED_IMAGE=ghcr.io/cloudwithnikhil/zero-trust-pipeline:aa772d516a8238a10e589f06cb88f169e6865ff3" >> "$GITHUB_ENV"
+          fi
+
+      - name: Test signed and unsigned image admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-image-admission.sh
+
+      - name: Write admission test summary
+        if: always()
+        run: |
+          {
+            echo "## Kubernetes Image Admission Tests"
+            echo
+            echo "- Kyverno chart: 3.9.2"
+            echo "- Unsigned image must be denied."
+            echo "- Trusted signed image must be admitted."
+            echo "- Tests use server-side dry runs."
           } >> "$GITHUB_STEP_SUMMARY"

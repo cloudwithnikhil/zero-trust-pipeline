@@ -1,0 +1,13 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRegistry
+metadata:
+  name: allow-ghcr-only
+spec:
+  enforcementAction: deny
+  match:
+    namespaces:
+      - zero-trust-demo
+    scope: Namespaced
+  parameters:
+    registries:
+      - ghcr.io/

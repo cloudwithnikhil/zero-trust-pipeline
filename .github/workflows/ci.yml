@@ -351,3 +351,102 @@ jobs:
             echo "- Trusted signed image must be admitted."
             echo "- Tests use server-side dry runs."
           } >> "$GITHUB_STEP_SUMMARY"
+
+          
+  gatekeeper-test:
+    name: Gatekeeper Registry Policy Tests
+    needs: validate
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Create disposable Kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: gatekeeper-test
+          node_image: kindest/node:v1.35.0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install Gatekeeper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+          helm repo update
+
+          helm upgrade --install gatekeeper gatekeeper/gatekeeper \
+            --namespace gatekeeper-system \
+            --create-namespace \
+            --wait \
+            --timeout 5m
+
+      - name: Wait for Gatekeeper admission controller
+        run: |
+          kubectl rollout status deployment/gatekeeper-controller-manager \
+            --namespace gatekeeper-system \
+            --timeout=180s
+
+      - name: Create protected namespace
+        run: |
+          kubectl create namespace zero-trust-demo
+
+      - name: Apply Gatekeeper constraint template
+        run: |
+          kubectl apply -f kubernetes/policies/gatekeeper-constraint-template.yaml
+
+      - name: Wait for generated constraint CRD
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kubectl wait \
+            --for=condition=Established \
+            crd/k8sallowedregistries.constraints.gatekeeper.sh \
+            --timeout=120s
+
+      - name: Apply allowed-registry constraint
+        run: |
+          kubectl apply -f kubernetes/policies/gatekeeper-allowed-registry.yaml
+
+      - name: Allow constraint to synchronize
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            if kubectl get k8sallowedregistry allow-ghcr-only >/dev/null 2>&1; then
+              sleep 5
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Gatekeeper constraint was not available." >&2
+          exit 1
+
+      - name: Test approved and denied registries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-gatekeeper-registry.sh
+
+      - name: Write Gatekeeper test summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Gatekeeper Registry Policy Tests"
+            echo
+            echo "- Gatekeeper runs in a disposable Kind cluster."
+            echo "- Approved GHCR image must be admitted."
+            echo "- Unapproved Docker Hub image must be denied."
+            echo "- Tests use server-side dry runs."
+          } >> "$GITHUB_STEP_SUMMARY"

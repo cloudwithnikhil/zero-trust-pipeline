@@ -165,6 +165,105 @@ Test-Check "Registry policy rejects Docker Hub images" {
     }
 }
 
+
+# 7. An unsigned image must be rejected by the Cosign signature policy.
+Test-Check "Admission policy rejects unsigned images" {
+    $unsignedImage = "ghcr.io/cloudwithnikhil/zero-trust-pipeline:unsigned-test-20261029113243"
+
+    $yaml = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unsigned-admission-validation
+  namespace: $Namespace
+spec:
+  containers:
+    - name: test
+      image: $unsignedImage
+      imagePullPolicy: Always
+"@
+
+    $tempFile = [System.IO.Path]::GetTempFileName()
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $tempFile,
+            $yaml,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $previousPreference = $ErrorActionPreference
+
+        try {
+            $ErrorActionPreference = "Continue"
+            $output = & kubectl create --dry-run=server -f $tempFile 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        $message = $output | Out-String
+
+        if ($exitCode -eq 0) {
+            throw "Unsigned image was unexpectedly admitted."
+        }
+
+        if ($message -notmatch [regex]::Escape(
+            "Image must have a valid Cosign signature from the trusted GitHub Actions workflow."
+        )) {
+            throw "Request failed for a reason other than the expected signature-policy denial: $message"
+        }
+    }
+    finally {
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 8. The trusted signed image must be admitted.
+Test-Check "Admission policy accepts trusted signed images" {
+    $signedImage = "ghcr.io/cloudwithnikhil/zero-trust-pipeline:aa772d516a8238a10e589f06cb88f169e6865ff3"
+
+    $yaml = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: signed-admission-validation
+  namespace: $Namespace
+spec:
+  containers:
+    - name: test
+      image: $signedImage
+      imagePullPolicy: Always
+"@
+
+    $tempFile = [System.IO.Path]::GetTempFileName()
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $tempFile,
+            $yaml,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $output = & kubectl create --dry-run=server -f $tempFile 2>&1
+        $exitCode = $LASTEXITCODE
+        $message = $output | Out-String
+
+        if ($exitCode -ne 0) {
+            throw "Trusted signed image was not admitted: $message"
+        }
+
+        if ($message -notmatch '(?i)server dry run') {
+            throw "kubectl did not confirm server-side dry-run admission: $message"
+        }
+    }
+    finally {
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+
 Write-Host "`n----------------------------------------"
 Write-Host "Results: $Passed passed, $Failed failed"
 

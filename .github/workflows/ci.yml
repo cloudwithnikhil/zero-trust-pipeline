@@ -438,7 +438,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          CRD="k8sallowedregistries.constraints.gatekeeper.sh"
+          CRD="k8sallowedregistry.constraints.gatekeeper.sh"
 
           for attempt in $(seq 1 60); do
             if kubectl wait \
@@ -457,10 +457,9 @@ jobs:
           echo "Gatekeeper did not establish the expected constraint CRD." >&2
           kubectl get constrainttemplates
           kubectl get constrainttemplate k8sallowedregistry -o yaml || true
-          kubectl get crd | grep gatekeeper || true
+          kubectl get crd "$CRD" -o yaml || true
           kubectl logs deployment/gatekeeper-controller-manager \
             --namespace gatekeeper-system \
-            --all-pods=true \
             --tail=100 || true
           exit 1
 

@@ -236,7 +236,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 
-          
+
   admission-test:
     name: Kubernetes Image Admission Tests
     needs: [validate, publish-and-sign]
@@ -285,48 +285,84 @@ jobs:
             --timeout 5m
 
 
+
       - name: Wait for Kyverno admission webhook
         shell: bash
         run: |
           set -euo pipefail
 
           kubectl rollout status deployment/kyverno-admission-controller \
-            --namespace kyverno \
+            -n kyverno --timeout=180s
+
+          kubectl wait \
+            --for=condition=Ready \
+            pod \
+            -l app.kubernetes.io/component=admission-controller \
+            -n kyverno \
             --timeout=180s
 
           for attempt in $(seq 1 30); do
             ENDPOINTS="$(kubectl get endpoints kyverno-svc \
-              --namespace kyverno \
+              -n kyverno \
               -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)"
 
             if [[ -n "$ENDPOINTS" ]]; then
-              echo "Kyverno service has ready endpoints: $ENDPOINTS"
-              break
-            fi
-
-            if [[ "$attempt" == "30" ]]; then
-              echo "Kyverno service has no ready endpoints." >&2
-              kubectl get pods -n kyverno -o wide
-              kubectl get svc,endpoints -n kyverno
-              kubectl logs deployment/kyverno-admission-controller \
-                --namespace kyverno --tail=100 || true
-              exit 1
+              echo "Kyverno service endpoints: $ENDPOINTS"
+              exit 0
             fi
 
             sleep 2
           done
 
-          kubectl get pods -n kyverno -o wide
-          kubectl get svc,endpoints -n kyverno
+          echo "Kyverno service has no ready endpoints." >&2
+          kubectl get pods,svc,endpoints -n kyverno
+          kubectl logs deployment/kyverno-admission-controller \
+            -n kyverno --tail=150 || true
+          exit 1
+
 
 
       - name: Create protected namespace
         run: |
           kubectl create namespace zero-trust-demo
 
+
+
       - name: Apply image signature policy
+        shell: bash
         run: |
-          kubectl apply -f kubernetes/policies/verify-signed-images.yaml
+          set -euo pipefail
+
+          for attempt in $(seq 1 12); do
+            set +e
+            output="$(kubectl apply \
+              -f kubernetes/policies/verify-signed-images.yaml 2>&1)"
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              echo "$output"
+              exit 0
+            fi
+
+            echo "$output"
+
+            if [[ "$output" == *"connection refused"* ||
+                  "$output" == *"context deadline exceeded"* ||
+                  "$output" == *"no endpoints available"* ]]; then
+              echo "Transient webhook connectivity failure ($attempt/12)."
+              sleep 5
+              continue
+            fi
+
+            echo "Policy application failed for a non-retryable reason." >&2
+            exit "$status"
+          done
+
+          echo "Kyverno webhook remained unavailable after retries." >&2
+          exit 1
+
+
 
       - name: Wait for image verification policy readiness
         shell: bash
@@ -370,6 +406,26 @@ jobs:
           set -euo pipefail
           bash scripts/test-image-admission.sh
 
+
+
+      - name: Diagnose Kyverno on admission failure
+        if: failure()
+        shell: bash
+        run: |
+          kubectl get pods -n kyverno -o wide || true
+          kubectl get svc,endpoints -n kyverno || true
+          kubectl get events -n kyverno \
+            --sort-by=.lastTimestamp || true
+          kubectl get mutatingwebhookconfigurations \
+            -o yaml || true
+          kubectl get validatingwebhookconfigurations \
+            -o yaml || true
+          kubectl logs deployment/kyverno-admission-controller \
+            -n kyverno --tail=200 || true
+          kubectl describe deployment kyverno-admission-controller \
+            -n kyverno || true
+
+
       - name: Write admission test summary
         if: always()
         run: |
@@ -382,7 +438,7 @@ jobs:
             echo "- Tests use server-side dry runs."
           } >> "$GITHUB_STEP_SUMMARY"
 
-          
+
   gatekeeper-test:
     name: Gatekeeper Registry Policy Tests
     needs: validate

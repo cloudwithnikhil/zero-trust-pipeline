@@ -72,6 +72,10 @@ Zero Trust replaces *implicit* trust with *continuous verification*:
 
 Explore the animated architecture to understand how the Zero Trust CI/CD pipeline moves container images through build validation, vulnerability scanning, SBOM generation, image signing, and Kubernetes admission control.
 
+## Zero Trust CI/CD Pipeline Architecture
+
+![Zero Trust CI/CD Pipeline Architecture](docs/zero-trust-ci-cd-pipeline.svg)
+
 **[View the Interactive Architecture](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html)**
 
 The animation includes three scenarios:

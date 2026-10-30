@@ -1,5 +1,9 @@
 # Security Validation and Test Evidence
 
+<p align="center">
+  <img src="zero-trust-ci-cd-security-overview.png" alt="Zero Trust CI/CD Security Validation" width="100%" />
+</p>
+
 ## 1. Overview
 
 This document records the security validation results for the **Zero Trust CI/CD Pipeline** project.

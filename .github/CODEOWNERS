@@ -1,0 +1,9 @@
+# Default owner for all files
+* @cloudwithnikhil
+
+# Require maintainer review for security-sensitive areas
+/.github/workflows/ @cloudwithnikhil
+/.github/ @cloudwithnikhil
+/kubernetes/policies/ @cloudwithnikhil
+/scripts/ @cloudwithnikhil
+/Dockerfile @cloudwithnikhil

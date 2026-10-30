@@ -1,13 +1,3 @@
-<p align="center">
-  <img src="docs/zero-trust-ci-cd-cover.png" alt="Zero Trust CI/CD Pipeline Architecture" width="100%" />
-</p>
-
-<h1 align="center">Zero Trust CI/CD Pipeline</h1>
-
-<p align="center">
-  Secure • Automated • Cloud Native
-</p>
-
 <div align="center">
 
 # 🛡️ Zero-Trust CI/CD Pipeline
@@ -23,6 +13,10 @@
 ![SBOM](https://img.shields.io/badge/SBOM-SPDX-4CAF50)
 
 </div>
+
+<p align="center">
+  <img src="docs/zero-trust-ci-cd-cover.png" alt="Zero Trust CI/CD Pipeline Architecture" width="100%" />
+</p>
 
 ---
 

@@ -1,4 +1,4 @@
-﻿name: Zero-Trust CI/CD
+name: Zero-Trust CI/CD
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build container image
         id: build-image

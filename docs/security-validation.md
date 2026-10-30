@@ -1,4 +1,8 @@
+<div align="center">
+
 # Security Validation and Test Evidence
+
+</div>
 
 <p align="center">
   <img src="zero-trust-ci-cd-security-overview.png" alt="Zero Trust CI/CD Security Validation" width="100%" />

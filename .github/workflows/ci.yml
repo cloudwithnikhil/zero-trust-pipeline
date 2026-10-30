@@ -8,31 +8,46 @@ on:
     branches:
       - main
   workflow_dispatch:
+  # Hardening: weekly re-scan so newly published CVEs surface without a code change.
+  # Runs validate + gatekeeper-test only (publish-and-sign and admission-test are skipped).
+  schedule:
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
 
+# Hardening: one run per ref; superseded PR runs are cancelled, main runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   IMAGE: ghcr.io/cloudwithnikhil/zero-trust-pipeline:${{ github.sha }}
+
+# Hardening: every third-party action is pinned to a full commit SHA (tag kept in the comment).
+# Let Dependabot (package-ecosystem: github-actions) raise PRs to update them.
 
 jobs:
   validate:
     name: Build, Scan and Generate SBOM
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     permissions:
       contents: read
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build container image
         id: build-image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           tags: ${{ env.IMAGE }}
@@ -41,7 +56,7 @@ jobs:
 
       - name: Generate SPDX SBOM
         id: sbom
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ${{ env.IMAGE }}
           format: spdx-json
@@ -50,16 +65,16 @@ jobs:
           upload-artifact: true
           upload-release-assets: false
 
-
       - name: Scan image for vulnerabilities
         id: grype
-        uses: anchore/scan-action@v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: ${{ env.IMAGE }}
           fail-build: true
           severity-cutoff: high
           output-format: json
-
+          # Optional: uncomment to ignore High/Critical findings that have no upstream fix yet.
+          # only-fixed: true
 
       - name: Save Grype JSON report
         if: always()
@@ -76,7 +91,7 @@ jobs:
 
       - name: Upload security evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: security-evidence
           path: |
@@ -89,7 +104,7 @@ jobs:
         run: docker save "$IMAGE" -o image.tar
 
       - name: Upload validated image for publishing
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: validated-container-image
           path: image.tar
@@ -119,7 +134,7 @@ jobs:
             echo "Security evidence artifact: \`security-evidence\`."
             echo "The SBOM is also uploaded as \`zero-trust-demo-sbom\`."
             echo
-            echo "Kubernetes admission validation is performed separately against the Kind cluster."
+            echo "Kyverno and Gatekeeper admission policies are tested in the \`admission-test\` and \`gatekeeper-test\` jobs."
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-and-sign:
@@ -129,6 +144,7 @@ jobs:
       image_ref: ${{ steps.sign-image.outputs.image_ref }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     permissions:
       contents: read
@@ -137,7 +153,7 @@ jobs:
 
     steps:
       - name: Download validated image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: validated-container-image
           path: .
@@ -158,7 +174,7 @@ jobs:
         run: docker push "$IMAGE"
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.0
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
 
       - name: Sign published image using GitHub OIDC
         id: sign-image
@@ -202,7 +218,7 @@ jobs:
 
       - name: Upload signing evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-signing-evidence
           path: |
@@ -235,8 +251,6 @@ jobs:
             echo "The verification checks the configured GitHub Actions identity and OIDC issuer."
           } >> "$GITHUB_STEP_SUMMARY"
 
-
-
   admission-test:
     name: Kubernetes Image Admission Tests
     needs: [validate, publish-and-sign]
@@ -253,22 +267,25 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     permissions:
       contents: read
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Create disposable Kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
         with:
           cluster_name: zero-trust
           node_image: kindest/node:v1.35.0
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Install Kyverno
         shell: bash
@@ -283,8 +300,6 @@ jobs:
             --version 3.9.2 \
             --wait \
             --timeout 5m
-
-
 
       - name: Wait for Kyverno admission webhook
         shell: bash
@@ -320,13 +335,9 @@ jobs:
             -n kyverno --tail=150 || true
           exit 1
 
-
-
       - name: Create protected namespace
         run: |
           kubectl create namespace zero-trust-demo
-
-
 
       - name: Apply image signature policy
         shell: bash
@@ -362,8 +373,6 @@ jobs:
           echo "Kyverno webhook remained unavailable after retries." >&2
           exit 1
 
-
-
       - name: Wait for image verification policy readiness
         shell: bash
         run: |
@@ -397,6 +406,8 @@ jobs:
           if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             echo "SIGNED_IMAGE=ghcr.io/cloudwithnikhil/zero-trust-pipeline:${COMMIT_SHA}" >> "$GITHUB_ENV"
           else
+            # PR / manual runs have no freshly signed image, so they reuse a known-good signed build.
+            # Hardening TODO: pin this by digest (…@sha256:cd4f2146…) or store it in a repo variable.
             echo "SIGNED_IMAGE=ghcr.io/cloudwithnikhil/zero-trust-pipeline:aa772d516a8238a10e589f06cb88f169e6865ff3" >> "$GITHUB_ENV"
           fi
 
@@ -405,8 +416,6 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-image-admission.sh
-
-
 
       - name: Diagnose Kyverno on admission failure
         if: failure()
@@ -425,7 +434,6 @@ jobs:
           kubectl describe deployment kyverno-admission-controller \
             -n kyverno || true
 
-
       - name: Write admission test summary
         if: always()
         run: |
@@ -438,27 +446,29 @@ jobs:
             echo "- Tests use server-side dry runs."
           } >> "$GITHUB_STEP_SUMMARY"
 
-
   gatekeeper-test:
     name: Gatekeeper Registry Policy Tests
     needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     permissions:
       contents: read
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Create disposable Kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
         with:
           cluster_name: gatekeeper-test
           node_image: kindest/node:v1.35.0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Install Gatekeeper
         shell: bash
@@ -468,6 +478,8 @@ jobs:
           helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
           helm repo update
 
+          # Hardening TODO: pin the chart like Kyverno above, e.g. add: --version <x.y.z>
+          # (use the version you validated with: helm list -n gatekeeper-system).
           helm upgrade --install gatekeeper gatekeeper/gatekeeper \
             --namespace gatekeeper-system \
             --create-namespace \
@@ -487,7 +499,6 @@ jobs:
       - name: Apply Gatekeeper constraint template
         run: |
           kubectl apply -f kubernetes/policies/gatekeeper-constraint-template.yaml
-
 
       - name: Wait for Gatekeeper constraint CRD
         shell: bash
@@ -518,8 +529,6 @@ jobs:
             --namespace gatekeeper-system \
             --tail=100 || true
           exit 1
-
-
 
       - name: Apply allowed-registry constraint
         run: |

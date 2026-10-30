@@ -4,6 +4,7 @@
 
 **Secure container delivery where nothing is trusted by default — every image is scanned, inventoried, signed, and verified again before it is allowed to run.**
 
+[![CI/CD](https://github.com/cloudwithnikhil/zero-trust-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudwithnikhil/zero-trust-pipeline/actions/workflows/ci.yml)
 ![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
 ![Docker](https://img.shields.io/badge/Container-Docker-2496ED?logo=docker&logoColor=white)
 ![Cosign](https://img.shields.io/badge/Signing-Cosign%20(keyless)-5A67D8)
@@ -11,6 +12,8 @@
 ![Kyverno](https://img.shields.io/badge/Admission-Kyverno-F77B3D)
 ![Gatekeeper](https://img.shields.io/badge/Policy-OPA%20Gatekeeper-7D64FF)
 ![SBOM](https://img.shields.io/badge/SBOM-SPDX-4CAF50)
+
+**[📐 Architecture](docs/architecture.md)** · **[✅ Security Validation](docs/security-validation.md)** · **[🎬 Interactive Demo](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html)**
 
 </div>
 
@@ -38,6 +41,7 @@
 14. [Design Decisions and Known Limitations](#14-design-decisions-and-known-limitations)
 15. [Roadmap](#15-roadmap)
 16. [Glossary](#16-glossary)
+17. [Documentation and References](#17-documentation-and-references)
 
 ---
 
@@ -55,6 +59,9 @@ The pipeline:
 4. **Publishes** the image to GitHub Container Registry (GHCR).
 5. **Signs** the image by immutable digest with Cosign using GitHub's OIDC identity (no long-lived signing keys).
 6. **Enforces** the result inside Kubernetes: Kyverno verifies the signature, Gatekeeper restricts the registry, and the workload itself runs with a locked-down security context.
+7. **Tests the policies automatically** in disposable Kind clusters in CI, so signed, unsigned, and unapproved-registry scenarios are checked on every run.
+
+> **Where to go next:** the design is explained in [`docs/architecture.md`](docs/architecture.md), and the recorded test evidence is in [`docs/security-validation.md`](docs/security-validation.md). See [section 17](#17-documentation-and-references) for the full list of references.
 
 ## 2. Why Zero Trust for CI/CD?
 
@@ -71,46 +78,54 @@ Zero Trust replaces *implicit* trust with *continuous verification*:
 | **Defense in depth** | Independent controls: scan → sign → registry policy → signature policy → hardened runtime |
 | **Evidence over assumption** | Scan reports, SBOM, and signing evidence are produced as artifacts for every run |
 
+## 3. Architecture
 
-## Interactive Architecture
+> 📐 For the full architecture write-up, see **[`docs/architecture.md`](docs/architecture.md)**. This section gives the overview.
 
-Explore the animated architecture to understand how the Zero Trust CI/CD pipeline moves container images through build validation, vulnerability scanning, SBOM generation, image signing, and Kubernetes admission control.
-
-## Zero Trust CI/CD Pipeline Architecture
+### 3.1 Interactive architecture
 
 ![Zero Trust CI/CD Pipeline Architecture](docs/zero-trust-ci-cd-pipeline.svg)
 
-**[View the Interactive Architecture](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html)**
+**[▶ View the Interactive Architecture](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html)**
 
-The animation includes three scenarios:
+The animation follows a container image through build validation, vulnerability scanning, SBOM generation, image signing, and Kubernetes admission control. It includes three scenarios:
 
-- **Signed image:** Demonstrates the intended successful signature-verification and admission flow.
-- **Unsigned image:** Illustrates how the signature policy is intended to reject an unsigned image.
-- **Unapproved registry:** Illustrates how Gatekeeper is intended to reject an image from an unapproved registry.
+- **Signed image:** the intended successful signature-verification and admission flow.
+- **Unsigned image:** how the signature policy is intended to reject an unsigned image.
+- **Unapproved registry:** how Gatekeeper is intended to reject an image from an unapproved registry.
 
-The animation is an architectural demonstration. Actual enforcement behavior is determined by the GitHub Actions workflow and Kubernetes policy manifests in this repository.
+The animation is an architectural demonstration. Actual enforcement behavior is determined by the GitHub Actions workflow and the Kubernetes policy manifests in this repository.
 
-## 3. Architecture
-
-### 3.1 High-level flow
+### 3.2 High-level flow
 
 ```mermaid
 flowchart TD
     DEV[Developer] -->|git push| GH[GitHub Repository]
     GH --> GHA[GitHub Actions Workflow<br/>ci.yml]
 
-    subgraph CI["Job 1: Build, Scan and Generate SBOM"]
+    subgraph J1["Job 1: validate"]
         B[Docker Build] --> S[Grype Vulnerability Scan<br/>fail on severity ≥ high]
         S --> SB[SPDX SBOM Generation]
     end
 
-    subgraph PUB["Job 2: Publish to GHCR and Sign with Cosign (main only)"]
+    subgraph J2["Job 2: publish-and-sign (main only)"]
         P[Push image to GHCR] --> SIGN[Cosign keyless signing<br/>by immutable digest]
         SIGN --> VER[Cosign verify<br/>identity + OIDC issuer]
     end
 
-    GHA --> CI --> PUB
-    PUB --> REG[(GHCR<br/>Signed Image)]
+    GHA --> J1 --> J2
+    J2 --> REG[(GHCR<br/>Signed Image)]
+
+    subgraph J3["Job 3: admission-test (disposable Kind)"]
+        KT[Install Kyverno via Helm<br/>apply signature policy] --> KR[Signed: accepted<br/>Unsigned: rejected]
+    end
+
+    subgraph J4["Job 4: gatekeeper-test (disposable Kind)"]
+        GT[Install Gatekeeper<br/>apply template + constraint] --> GR[Approved registry: allowed<br/>Unapproved / misleading / init: denied]
+    end
+
+    VER --> J3
+    VER --> J4
 
     REG -->|image pull request| K8S
 
@@ -126,7 +141,9 @@ flowchart TD
     GK -.->|other registry| DENY
 ```
 
-### 3.2 Trust chain (sequence)
+> The diagram shows the automated pipeline and the admission-policy tests. The repository does **not** implement a production release process that deploys every verified image to a production cluster.
+
+### 3.3 Trust chain (sequence)
 
 ```mermaid
 sequenceDiagram
@@ -156,7 +173,7 @@ sequenceDiagram
     K-->>Dev: Pod admitted or request rejected
 ```
 
-### 3.3 Defense layers
+### 3.4 Defense layers
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -178,44 +195,56 @@ sequenceDiagram
 
 | Area | Tool | Role in this project |
 |---|---|---|
-| CI/CD | **GitHub Actions** | Orchestrates build, scan, SBOM, publish, and sign |
+| CI/CD | **GitHub Actions** | Orchestrates build, scan, SBOM, publish, sign, and policy tests |
 | Containerization | **Docker** | Builds the application image |
 | Base image | **python:3.12-alpine** | Small attack surface |
 | Vulnerability scanning | **Grype** | Scans the image; JSON report; fails the build at `high` severity |
 | SBOM | **SPDX (JSON)** | Machine-readable inventory of image components |
 | Registry | **GHCR** | Stores published images |
 | Signing | **Cosign (keyless / Sigstore)** | Signs by digest using GitHub OIDC identity |
-| Cluster | **Kubernetes (Kind)** | Local cluster `kind-zero-trust` for admission testing |
+| Cluster | **Kubernetes (Kind)** | Local cluster `kind-zero-trust` plus disposable clusters in CI |
 | Signature enforcement | **Kyverno** (`ImageValidatingPolicy`) | Rejects images without a valid signature from the trusted workflow |
 | Registry enforcement | **OPA Gatekeeper** | Rejects images from non-approved registries |
-| Validation | **PowerShell** | Automated security validation and regression tests |
+| Packaging | **Helm** | Installs Kyverno and Gatekeeper in test clusters |
+| Validation | **PowerShell and Bash** | Automated security validation and regression tests |
 
 ## 5. Repository Structure
 
 ```
 zero-trust-pipeline/
 ├── .github/
-│   └── workflows/        # GitHub Actions CI pipeline (ci.yml)
-├── app/                  # Demo application (server.py)
-├── docs/                 # Security validation evidence and results
-│   └── security-validation.md
-├── kubernetes/           # Workload manifests and admission policies
-├── scripts/              # PowerShell validation and regression scripts
-│   ├── validate-security.ps1
-│   └── test-image-admission.ps1
-├── Dockerfile            # Hardened, non-root image definition
-├── .dockerignore         # Keeps build context minimal
-├── .gitignore            # Excludes local evidence (artifacts/) etc.
+│   └── workflows/
+│       └── ci.yml                               # Four-job CI/CD workflow
+├── app/
+│   └── server.py                                # Demo HTTP service (/health)
+├── docs/
+│   ├── architecture.md                          # Architecture documentation
+│   ├── security-validation.md                   # Recorded validation evidence
+│   ├── zero-trust-ci-cd-cover.png               # README cover image
+│   └── zero-trust-ci-cd-pipeline.svg            # Architecture diagram
+├── kubernetes/
+│   ├── app-deployment.yaml                      # Hardened application Deployment
+│   └── policies/
+│       ├── gatekeeper-constraint-template.yaml  # Reusable registry-policy logic
+│       ├── gatekeeper-allowed-registry.yaml     # Constraint with the allowlist
+│       └── verify-signed-images.yaml            # Kyverno signature policy
+├── scripts/
+│   ├── validate-security.ps1 / .sh              # Full local validation
+│   ├── test-image-admission.ps1 / .sh           # Signed/unsigned admission tests
+│   └── test-gatekeeper-registry.sh              # Registry policy regression tests
+├── Dockerfile                                   # Hardened, non-root image definition
+├── .dockerignore                                # Keeps build context minimal
+├── .gitignore                                   # Excludes local evidence (artifacts/) etc.
 └── README.md
 ```
 
 | Path | Purpose |
 |---|---|
-| `.github/workflows/` | Defines the two-job pipeline: validate, then publish and sign |
+| `.github/workflows/` | Defines the four-job pipeline: validate, publish and sign, Kyverno admission test, Gatekeeper registry test |
 | `app/` | The small Python HTTP service used as the deployable workload |
-| `kubernetes/` | Kubernetes resources for the demo workload and the Kyverno/Gatekeeper policies |
+| `kubernetes/` | The demo workload and the Kyverno/Gatekeeper policies |
 | `scripts/` | Repeatable checks that prove the policies actually block bad images |
-| `docs/` | Human-readable record of what was tested and what the results were |
+| `docs/` | [Architecture](docs/architecture.md), [security validation evidence](docs/security-validation.md), and README visuals |
 
 ## 6. The Application and Container Image
 
@@ -252,22 +281,38 @@ CMD ["python", "server.py"]
 
 ## 7. CI Pipeline (GitHub Actions)
 
-The workflow (`.github/workflows/ci.yml`) has two jobs. The second only runs after the first succeeds.
+The workflow (`.github/workflows/ci.yml`, named **Zero-Trust CI/CD**) has four jobs.
 
-### Job 1 — Build, Scan and Generate SBOM
+### Job 1 — `validate`: Build, Scan and Generate SBOM
 
 1. Build the container image.
 2. Scan it with **Grype** (`severity-cutoff: high`, `fail-build: true`). A finding at or above the cutoff **fails the pipeline**, so a vulnerable image never reaches the registry.
 3. Generate an **SPDX JSON SBOM** listing every component in the image.
 4. Write build, SBOM, and scan outcomes to the **GitHub job summary**.
 
-### Job 2 — Publish to GHCR and Sign with Cosign
+### Job 2 — `publish-and-sign`: Publish to GHCR and Sign with Cosign
 
 Runs on **pushes to `main`** after Job 1 passes.
 
 1. Publish the validated image to **GHCR**.
 2. Sign it with **Cosign** using the immutable **digest** (not a mutable tag).
 3. **Verify** the signature against the expected workflow identity and OIDC issuer.
+
+### Job 3 — `admission-test`: Kyverno signature policy
+
+1. Create an isolated **Kind** cluster.
+2. Install **Kyverno** with Helm and wait for the admission components and webhook endpoints to be ready.
+3. Apply the signature policy, with bounded retries for transient connectivity errors.
+4. Test signed and unsigned image behavior.
+5. Print diagnostics if setup or policy application fails.
+
+### Job 4 — `gatekeeper-test`: Registry allowlist
+
+1. Create a separate disposable **Kind** cluster.
+2. Install **Gatekeeper** and apply the constraint template and constraint.
+3. Run `scripts/test-gatekeeper-registry.sh` against approved and prohibited image references.
+
+> The CI tests validate policy **behavior** in disposable clusters. They do not prove the same policies are deployed to every cluster where the application might run.
 
 ### Workflow artifacts
 
@@ -293,7 +338,7 @@ Signing is **keyless** (Sigstore). Instead of storing a private key as a secret,
 **Why this matters**
 
 - There is **no signing key to leak** or rotate.
-- A signature from any *other* workflow, branch, or repository is rejected, even if it is technically valid.
+- A signature from any *other* workflow, branch, or repository is rejected, even if it is technically valid. Finding *a* signature is not enough; identity and issuer must match.
 - Signing by digest prevents "tag swap" attacks, where a tag is silently repointed to different content.
 
 ## 9. Kubernetes Admission Control
@@ -301,6 +346,8 @@ Signing is **keyless** (Sigstore). Instead of storing a private key as a secret,
 Two independent controllers decide whether a Pod may start. They are deliberately separate so that a failure or bypass of one does not disable the other.
 
 ### 9.1 Kyverno — signature verification
+
+Policy file: `kubernetes/policies/verify-signed-images.yaml`
 
 | Item | Value |
 |---|---|
@@ -313,13 +360,29 @@ An image within the protected repository scope that is unsigned, or signed by th
 
 ### 9.2 OPA Gatekeeper — registry allow-list
 
+Policy files: `kubernetes/policies/gatekeeper-constraint-template.yaml` and `gatekeeper-allowed-registry.yaml`
+
 | Item | Value |
 |---|---|
 | Constraint name | `allow-ghcr-only` |
 | Behavior | Rejects any image not pulled from GHCR |
+| Parameterized by | `input.parameters.registries` (at least one entry required) |
 | Verified by | Denial of `docker.io/library/nginx:latest` |
 
-### 9.3 Environment
+The template parses the real registry hostname instead of matching substrings, and checks application **and init** containers. `scripts/test-gatekeeper-registry.sh` covers four cases:
+
+| Scenario | Expected result |
+|---|---|
+| Approved GHCR image | Allowed |
+| Unapproved Docker Hub image | Denied |
+| Misleading registry hostname | Denied |
+| Unapproved init-container image | Denied |
+
+### 9.3 Why both?
+
+A registry allowlist limits **where** images come from but does not prove **who built** them. A signature policy proves the builder's identity. Each closes a gap the other leaves open.
+
+### 9.4 Environment (local validation cluster)
 
 | Item | Value |
 |---|---|
@@ -330,7 +393,7 @@ An image within the protected repository scope that is unsigned, or signed by th
 
 ## 10. Workload Hardening
 
-The application Deployment is configured to follow Kubernetes security best practice:
+The application Deployment (`kubernetes/app-deployment.yaml`) is configured to follow Kubernetes security best practice:
 
 | Setting | Effect |
 |---|---|
@@ -352,6 +415,8 @@ The application Deployment is configured to follow Kubernetes security best prac
 | Someone signs an image with a different identity or repo | Kyverno checks signer identity and issuer |
 | Mutable tag is repointed to malicious content | Signing and admission use the immutable digest |
 | Engineer deploys an image from a public or untrusted registry | Gatekeeper `allow-ghcr-only` |
+| Registry-name trick (misleading hostname) | Hostname-aware parsing, regression-tested |
+| Unapproved image hidden in an init container | Policy covers init containers, regression-tested |
 | Signing key is stolen | No long-lived key exists (keyless / OIDC) |
 | Container compromise leads to host or cluster pivot | Non-root, read-only FS, no capabilities, no token, resource limits |
 | Compromised Pod is reachable from outside | `ClusterIP`-only Service |
@@ -361,9 +426,10 @@ The application Deployment is configured to follow Kubernetes security best prac
 ### Prerequisites
 
 - Docker
-- [Kind](https://kind.sigs.k8s.io/) and `kubectl`
-- PowerShell (the validation scripts are `.ps1`)
+- [Kind](https://kind.sigs.k8s.io/), `kubectl`, and Helm
+- PowerShell (`.ps1` scripts) or Bash (`.sh` scripts)
 - Kyverno and OPA Gatekeeper installed in the cluster
+- Cosign (optional, for manual signature verification)
 - A GitHub repository with Actions and GHCR packages enabled (to reproduce the CI side)
 
 ### Run the application locally
@@ -397,6 +463,8 @@ cosign verify ghcr.io/cloudwithnikhil/zero-trust-pipeline@<digest> \
 
 ## 13. Security Validation and Test Results
 
+> ✅ The full evidence record, environment details, and negative-test observations are in **[`docs/security-validation.md`](docs/security-validation.md)**.
+
 ### Run the tests
 
 From the repository root:
@@ -409,9 +477,19 @@ From the repository root:
 .\scripts\test-image-admission.ps1
 ```
 
-- Both scripts require the intended Kind cluster and admission controllers.
-- The regression script confirms the active context is `kind-zero-trust` before running.
+```bash
+# Bash equivalents
+bash scripts/validate-security.sh
+bash scripts/test-image-admission.sh
+
+# Gatekeeper registry policy regression tests
+bash scripts/test-gatekeeper-registry.sh
+```
+
+- The local scripts require the intended Kind cluster and admission controllers.
+- The admission regression script confirms the active context is `kind-zero-trust` before running.
 - Admission tests use `kubectl create --dry-run=server`, so **no persistent test Pods are created**.
+- Read each script before pointing it at a shared cluster; applying a constraint can affect future deployments.
 
 ### Latest result: 8 passed, 0 failed
 
@@ -435,7 +513,14 @@ From the repository root:
 | A nonexistent tag was denied (`MANIFEST_UNKNOWN`) | **Not** proof of signature enforcement; the registry simply had no such image |
 | An image outside Kyverno's configured scope was accepted | Expected; it did not test signature rejection |
 
-Full detail is in [`docs/security-validation.md`](docs/security-validation.md).
+### Quick troubleshooting
+
+| Symptom | First checks |
+|---|---|
+| Kyverno webhook connection refused | `kubectl get pods -A`, `kubectl get endpoints -A`, `kubectl get events -A --sort-by=.lastTimestamp`. This is a readiness problem, not a policy decision |
+| Signed image rejected | Compare signer identity and issuer in `ci.yml` with the Kyverno policy; read the specific error instead of weakening the policy |
+| Gatekeeper allows an unapproved image | Treat as a policy regression: check init-container coverage, hostname parsing, and that the constraint is enforced |
+| `kubectl` cannot reach the cluster | `kubectl config current-context`, `kubectl get nodes` |
 
 ## 14. Design Decisions and Known Limitations
 
@@ -446,22 +531,25 @@ Full detail is in [`docs/security-validation.md`](docs/security-validation.md).
 - **Keyless signing.** Removes key management and ties trust to a workflow identity.
 - **Fail closed on scan results.** A high-severity finding stops the release.
 - **Dry-run admission tests.** Prove policy behavior without leaving test workloads behind.
+- **Disposable test clusters in CI.** Policy tests that intentionally reject workloads are isolated from long-lived environments.
+- **Classify failures correctly.** A vulnerability finding, signature rejection, policy violation, webhook timeout, and missing dependency each need a different fix.
 
 **Limitations**
 
-- Admission tests run against a **local Kind cluster** and are **separate from CI**; they must be re-run independently.
+- CI tests run in **disposable Kind clusters**; the local `kind-zero-trust` validation is a **separate** environment and must be re-run independently.
 - Automated validation checks current cluster state and does not replace reviewing policy definitions, scan findings, and signing evidence.
 - Local `artifacts/` evidence is excluded from Git; publish only sanitized evidence on purpose.
+- No production deployment stage, runtime threat detection, alert routing, or comprehensive secret/IaC scanning is implemented.
 - Scope is a single demo workload and a single namespace.
 
 ## 15. Roadmap
 
-- [ ] Run admission regression tests in CI against an ephemeral Kind cluster
 - [ ] Attach and verify SBOM and provenance attestations (SLSA) at admission
-- [ ] Add secret scanning and static analysis stages
-- [ ] Add a GitOps deployment flow (e.g., Argo CD or Flux)
+- [ ] Add secret scanning, IaC scanning, and static analysis stages
+- [ ] Add a GitOps deployment flow (e.g., Argo CD or Flux) with environment approvals
 - [ ] Add runtime threat detection (e.g., Falco)
 - [ ] Add Pod Security Admission and NetworkPolicies
+- [ ] Improve reporting for admission denials and webhook health
 - [ ] Add a repository `LICENSE`
 
 ## 16. Glossary
@@ -480,7 +568,41 @@ Full detail is in [`docs/security-validation.md`](docs/security-validation.md).
 | **Kyverno** | Kubernetes-native policy engine; here it verifies image signatures |
 | **OPA Gatekeeper** | Policy controller for Kubernetes admission using Open Policy Agent |
 | **Admission control** | Kubernetes checks that approve or reject resources before they are stored and run |
-| **Kind** | "Kubernetes in Docker"; a local cluster for testing |
+| **Kind** | "Kubernetes in Docker"; local and disposable clusters for testing |
+| **Helm** | Kubernetes package manager, used here to install policy controllers |
+
+## 17. Documentation and References
+
+### Project documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Architecture of the pipeline: components, trust boundaries, and how an image flows from commit to cluster |
+| [`docs/security-validation.md`](docs/security-validation.md) | Validation environment, the 8-check result table, and negative-test observations |
+| [Interactive architecture](https://cloudwithnikhil.github.io/zero-trust-pipeline/zero-trust-ci-cd-pipeline-architecture.html) | Animated walkthrough of the signed, unsigned, and unapproved-registry scenarios |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | The four-job Zero-Trust CI/CD workflow |
+| [`kubernetes/policies/`](kubernetes/policies) | Kyverno signature policy and Gatekeeper template and constraint |
+| [`scripts/`](scripts) | Validation and regression test scripts (PowerShell and Bash) |
+
+### Which document answers which question?
+
+| If you want to know... | Read |
+|---|---|
+| How the pieces fit together and why | [Architecture](docs/architecture.md) and [section 3](#3-architecture) |
+| What was tested and what the results were | [Security Validation](docs/security-validation.md) and [section 13](#13-security-validation-and-test-results) |
+| How signing and verification are configured | [Section 8](#8-image-signing-and-verification) and `ci.yml` |
+| How admission policies behave | [Section 9](#9-kubernetes-admission-control) and `kubernetes/policies/` |
+| How to run the tests yourself | [Section 13](#13-security-validation-and-test-results) and `scripts/` |
+
+### External references
+
+- [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/)
+- [Kyverno documentation](https://kyverno.io/docs/)
+- [OPA Gatekeeper](https://open-policy-agent.github.io/gatekeeper/website/)
+- [Grype](https://github.com/anchore/grype)
+- [SPDX specification](https://spdx.dev/)
+- [GitHub Actions OIDC](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+- [Kind](https://kind.sigs.k8s.io/)
 
 ---
 

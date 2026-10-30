@@ -268,7 +268,7 @@ jobs:
           node_image: kindest/node:v1.35.0
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Install Kyverno
         shell: bash
@@ -458,7 +458,7 @@ jobs:
           node_image: kindest/node:v1.35.0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Install Gatekeeper
         shell: bash

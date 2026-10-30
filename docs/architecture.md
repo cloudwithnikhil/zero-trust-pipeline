@@ -1,6 +1,4 @@
-﻿![Zero Trust CI/CD Pipeline Architecture](zero-trust-ci-cd-pipeline-architecture.png)
-
-# Zero-Trust CI/CD Architecture
+﻿# Zero-Trust CI/CD Architecture
 
 > **A security-first software delivery architecture that builds, validates, signs, and deploys trusted container images to Kubernetes.**
 
@@ -8,6 +6,7 @@
   **Secure Software Supply Chain · Automated Security Validation · Zero-Trust Deployment**
 </p>
 
+![Zero Trust CI/CD Pipeline Architecture](zero-trust-ci-cd-pipeline-architecture.png)
 ---
 
 ## 1. Overview

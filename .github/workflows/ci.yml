@@ -1,4 +1,4 @@
-﻿name: Zero-Trust CI/CD
+name: Zero-Trust CI/CD
 
 on:
   push:
@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload security evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: security-evidence
           path: |
@@ -89,7 +89,7 @@ jobs:
         run: docker save "$IMAGE" -o image.tar
 
       - name: Upload validated image for publishing
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validated-container-image
           path: image.tar
@@ -202,7 +202,7 @@ jobs:
 
       - name: Upload signing evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: image-signing-evidence
           path: |

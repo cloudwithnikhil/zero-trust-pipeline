@@ -262,7 +262,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Create disposable Kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@v1.15.2
         with:
           cluster_name: zero-trust
           node_image: kindest/node:v1.35.0
@@ -452,7 +452,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Create disposable Kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@v1.15.2
         with:
           cluster_name: gatekeeper-test
           node_image: kindest/node:v1.35.0
